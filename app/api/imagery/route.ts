@@ -1,8 +1,7 @@
 import { GoogleGenAI } from "@google/genai";
 import v7 from "@/config/v7.json";
-import local from "@/config/local.json";
-import { LOCAL_MODE_ENABLED } from "@/lib/local-backends";
-import { generateLocalImage, type LocalImageryScene } from "@/lib/local-imagery";
+import { imageryConfig } from "@/lib/local-backends";
+import { generateLocalImage, buildLocalPrompt, type LocalImageryScene } from "@/lib/local-imagery";
 import {
   checkRateLimit,
   hasMismatchedOrigin,
@@ -11,9 +10,6 @@ import {
 
 export const runtime = "nodejs";
 export const maxDuration = 300;
-
-/** Local ComfyUI serves imagery unless ZEROPREP_LOCAL_IMAGERY=0 forces Gemini. */
-const USE_LOCAL_IMAGERY = LOCAL_MODE_ENABLED && process.env.ZEROPREP_LOCAL_IMAGERY !== "0";
 
 type ImageryRequest = {
   sceneId?: unknown;
@@ -66,6 +62,62 @@ function cardSummary(value: unknown) {
     .filter(Boolean)
     .join("; ")
     .slice(0, 700);
+}
+
+/**
+ * Any OpenAI-compatible image endpoint (`POST /images/generations`).
+ * Providers differ on aspect ratio names, so the configured size is mapped to
+ * the closest supported one and the response is accepted as either base64 or a
+ * URL, which covers OpenAI, Azure-style gateways, and local shims.
+ */
+async function generateRemoteImage(
+  imagery: ReturnType<typeof imageryConfig>,
+  scene: LocalImageryScene,
+  signal: AbortSignal,
+) {
+  const size =
+    imagery.width === imagery.height
+      ? "1024x1024"
+      : imagery.width >= imagery.height
+        ? "1536x1024"
+        : "1024x1536";
+
+  const response = await fetch(`${imagery.url}/images/generations`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${imagery.apiKey}`,
+    },
+    signal,
+    body: JSON.stringify({
+      model: imagery.model,
+      prompt: buildLocalPrompt(scene),
+      n: 1,
+      size,
+    }),
+  });
+
+  if (!response.ok) {
+    return { ok: false as const, error: `Image API failed: ${(await response.text()).slice(0, 300)}` };
+  }
+
+  const payload = (await response.json()) as {
+    data?: { b64_json?: string; url?: string }[];
+  };
+  const first = payload.data?.[0];
+  if (first?.b64_json) {
+    return { ok: true as const, bytes: Buffer.from(first.b64_json, "base64"), mimeType: "image/png" };
+  }
+  if (first?.url) {
+    const file = await fetch(first.url, { signal });
+    if (!file.ok) return { ok: false as const, error: "Image API returned an unreachable URL." };
+    return {
+      ok: true as const,
+      bytes: Buffer.from(await file.arrayBuffer()),
+      mimeType: file.headers.get("content-type") || "image/png",
+    };
+  }
+  return { ok: false as const, error: "Image API returned no image." };
 }
 
 function localCards(value: unknown): { title: string; body: string }[] {
@@ -205,20 +257,30 @@ export async function POST(request: Request) {
     return Response.json({ error: "The scene is incomplete." }, { status: 400 });
   }
 
-  if (USE_LOCAL_IMAGERY) {
-    const scene: LocalImageryScene = {
-      sceneId,
-      kind,
-      eyebrow: cleanText(body.eyebrow, 120),
-      title,
-      subtitle: cleanText(body.subtitle, 500),
-      metric: cleanText(body.metric, 80),
-      metricLabel: cleanText(body.metricLabel, 120),
-      quote: cleanText(body.quote, 500),
-      cards: localCards(body.cards),
-      accent: cleanText(body.accent, 16),
-      referenceCount: references.length,
-    };
+  const imagery = imageryConfig();
+
+  if (!imagery.enabled) {
+    return Response.json(
+      { error: "Image generation is turned off in settings." },
+      { status: 409 },
+    );
+  }
+
+  const scene: LocalImageryScene = {
+    sceneId,
+    kind,
+    eyebrow: cleanText(body.eyebrow, 120),
+    title,
+    subtitle: cleanText(body.subtitle, 500),
+    metric: cleanText(body.metric, 80),
+    metricLabel: cleanText(body.metricLabel, 120),
+    quote: cleanText(body.quote, 500),
+    cards: localCards(body.cards),
+    accent: cleanText(body.accent, 16),
+    referenceCount: references.length,
+  };
+
+  if (imagery.provider === "comfyui") {
     const rendered = await generateLocalImage(scene, request.signal);
     if (!rendered.ok) {
       if ("aborted" in rendered || request.signal.aborted) {
@@ -232,13 +294,41 @@ export async function POST(request: Request) {
         "Content-Type": rendered.mimeType,
         "Cache-Control": "private, no-store, max-age=0",
         "X-ZeroPrep-Scene": sceneId,
-        "X-ZeroPrep-Image-Model": `${local.imagery.provider}:${local.imagery.checkpoint}`,
+        "X-ZeroPrep-Image-Model": `comfyui:${imagery.model}`,
         "X-ZeroPrep-Render-Ms": String(rendered.elapsedMs),
       },
     });
   }
 
-  const apiKey = process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY;
+  if (imagery.provider === "openai") {
+    if (!imagery.apiKey) {
+      return Response.json(
+        { error: "The image API needs an API key. Add one in settings." },
+        { status: 503 },
+      );
+    }
+    try {
+      const generated = await generateRemoteImage(imagery, scene, request.signal);
+      if (!generated.ok) {
+        return Response.json({ error: generated.error }, { status: 502 });
+      }
+      return new Response(generated.bytes, {
+        status: 200,
+        headers: {
+          "Content-Type": generated.mimeType,
+          "Cache-Control": "private, no-store, max-age=0",
+          "X-ZeroPrep-Scene": sceneId,
+          "X-ZeroPrep-Image-Model": `openai:${imagery.model}`,
+        },
+      });
+    } catch (error) {
+      if (request.signal.aborted) return new Response(null, { status: 499 });
+      const message = error instanceof Error ? error.message : "The image API request failed.";
+      return Response.json({ error: message }, { status: 502 });
+    }
+  }
+
+  const apiKey = imagery.apiKey || process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY;
   if (!apiKey) {
     return Response.json(
       { error: "Generated imagery needs GEMINI_API_KEY in the server environment." },

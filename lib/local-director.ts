@@ -1,21 +1,15 @@
-import local from "@/config/local.json";
-import {
-  DIRECTOR_MODEL,
-  DIRECTOR_TIMEOUT_MS,
-  DIRECTOR_URL,
-  LOCAL_MODE_ENABLED,
-} from "@/lib/local-backends";
+import { directorConfig } from "@/lib/local-backends";
 import { DIRECTOR_INSTRUCTIONS, assetInstructions, stageTool } from "@/lib/director";
 import type { PresentationAssetCatalogEntry } from "@/lib/presentation-assets";
 
 /**
- * The fully local replacement for an OpenAI Realtime director turn.
+ * The offline replacement for an OpenAI Realtime director turn.
  *
- * Local models are not all created equal: some answer through the native tool
+ * Served models are not all created equal: some answer through the native tool
  * channel, some through `content`, and some (the Qwen3 family) through
  * `reasoning_content`. Every candidate is parsed with the same tolerant
  * extractor, so the client receives one identical `stage_visuals` command
- * regardless of which local model is serving.
+ * whichever endpoint the presenter configured.
  */
 
 export type DirectorHistoryEntry = { transcript: string; command: unknown };
@@ -143,10 +137,10 @@ export function extractCommand(raw: string): Record<string, unknown> | null {
   return null;
 }
 
-function historyMessages(value: unknown) {
+function historyMessages(value: unknown, turns: number) {
   if (!Array.isArray(value)) return [];
   const messages: { role: "user" | "assistant"; content: string }[] = [];
-  for (const rawEntry of value.slice(-local.director.history_turns)) {
+  for (const rawEntry of value.slice(-turns)) {
     const entry = (rawEntry ?? {}) as Partial<DirectorHistoryEntry>;
     const transcript = cleanText(entry.transcript, 600);
     if (!transcript || !entry.command) continue;
@@ -163,9 +157,7 @@ export async function runLocalDirector(options: {
   signal?: AbortSignal;
 }): Promise<DirectorResult> {
   const { transcript, history, catalog, signal } = options;
-  if (!LOCAL_MODE_ENABLED) {
-    return { ok: false, status: 503, error: "Local mode is disabled (ZEROPREP_LOCAL=0)." };
-  }
+  const config = directorConfig();
 
   const assetIds = catalog.map((asset) => asset.id);
   const schema = toLocalGrammarSchema(stageTool(assetIds).parameters);
@@ -176,25 +168,28 @@ export async function runLocalDirector(options: {
 
 You are running fully offline on this machine. Answer with one JSON object that matches the supplied schema and nothing else.`,
     },
-    ...historyMessages(history),
+    ...historyMessages(history, config.historyTurns),
     { role: "user" as const, content: transcript },
   ];
 
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), DIRECTOR_TIMEOUT_MS);
+  const timer = setTimeout(() => controller.abort(), config.timeoutMs);
   const started = Date.now();
   if (signal) signal.addEventListener("abort", () => controller.abort(), { once: true });
 
   try {
-    const response = await fetch(`${DIRECTOR_URL}/chat/completions`, {
+    const response = await fetch(`${config.url}/chat/completions`, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: {
+        "Content-Type": "application/json",
+        ...(config.apiKey ? { Authorization: `Bearer ${config.apiKey}` } : {}),
+      },
       signal: controller.signal,
       body: JSON.stringify({
-        model: DIRECTOR_MODEL,
+        model: config.model,
         messages,
-        temperature: local.director.temperature,
-        max_tokens: local.director.max_tokens,
+        temperature: config.temperature,
+        max_tokens: config.maxTokens,
         response_format: {
           type: "json_schema",
           json_schema: { name: "stage_visuals", strict: true, schema },
@@ -207,7 +202,7 @@ You are running fully offline on this machine. Answer with one JSON object that 
       return {
         ok: false,
         status: 502,
-        error: `Local director model failed: ${detail.slice(0, 400)}`,
+        error: `Director endpoint failed: ${detail.slice(0, 400)}`,
       };
     }
 
@@ -232,11 +227,11 @@ You are running fully offline on this machine. Answer with one JSON object that 
     for (const candidate of candidates) {
       const command = extractCommand(candidate);
       if (command) {
-        const sceneIndex = Array.isArray(history) ? history.length : 0;
+              const sceneIndex = Array.isArray(history) ? history.length : 0;
         return {
           ok: true,
           command: applyAccentRotation(sanitizeCommand(command, assetIds), sceneIndex),
-          model: DIRECTOR_MODEL,
+          model: config.model,
           elapsedMs: Date.now() - started,
           completionTokens: payload.usage?.completion_tokens ?? null,
         };
@@ -246,7 +241,7 @@ You are running fully offline on this machine. Answer with one JSON object that 
     return {
       ok: false,
       status: 502,
-      error: "The local director model did not return a usable scene command.",
+      error: `The director model ${config.model} did not return a usable scene command.`,
     };
   } catch (error) {
     return {
@@ -254,8 +249,8 @@ You are running fully offline on this machine. Answer with one JSON object that 
       status: 502,
       error:
         error instanceof Error
-          ? `Local director model is unreachable: ${error.message}`
-          : "The local director model is unreachable.",
+          ? `Director endpoint is unreachable: ${error.message}`
+          : "The director endpoint is unreachable.",
     };
   } finally {
     clearTimeout(timer);

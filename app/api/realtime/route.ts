@@ -8,6 +8,7 @@ import {
 } from "../../../lib/director";
 import { DEFAULT_REALTIME_MODEL, isRealtimeModel } from "../../../lib/realtime-models";
 import { checkRateLimit, rateLimitResponse } from "../../../lib/request-guards";
+import { resolveSettings } from "../../../lib/settings";
 
 export async function POST(request: Request) {
   const rateLimit = checkRateLimit(
@@ -18,7 +19,7 @@ export async function POST(request: Request) {
   );
   if (!rateLimit.allowed) return rateLimitResponse(rateLimit);
 
-  const apiKey = process.env.OPENAI_API_KEY;
+  const apiKey = resolveSettings().cloud.openaiApiKey || process.env.OPENAI_API_KEY;
   const requestedModel = request.headers.get("X-ZeroPrep-Realtime-Model");
   const assetCatalog = parseAssetCatalog(request.headers.get("X-ZeroPrep-Asset-Catalog"));
   const assetIds = assetCatalog.map((asset) => asset.id);

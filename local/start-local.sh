@@ -22,7 +22,10 @@ COMFY_PORT="${ZEROPREP_COMFY_PORT:-8188}"
 ASR_PORT="${ZEROPREP_ASR_PORT:-8099}"
 
 LMSTUDIO_BIN="${ZEROPREP_LMSTUDIO_BIN:-$HOME/.lmstudio/bin/lms}"
+# DIRECTOR_MODEL is the API identifier the app asks for; LMSTUDIO_MODEL is the
+# downloaded model key to load under that identifier. They are different things.
 DIRECTOR_MODEL="${ZEROPREP_DIRECTOR_MODEL:-zeroprep-director}"
+LMSTUDIO_MODEL="${ZEROPREP_LMSTUDIO_MODEL:-qwen3.5-9b-coder-i1}"
 COMFY_DIR="${ZEROPREP_COMFY_DIR:-/media/parhamhard/D-Drive/Parham/projects/AI/ComfyUI}"
 COMFY_PYTHON="${ZEROPREP_COMFY_PYTHON:-$COMFY_DIR/.venv/bin/python}"
 ASR_PYTHON="${ZEROPREP_ASR_PYTHON:-$(command -v python3)}"
@@ -55,8 +58,13 @@ spawn() { # spawn <name> <logfile> <command...>
     printf '  %-16s already running (pid %s)\n' "$name" "$(cat "$RUN_DIR/$name.pid")"
     return 0
   fi
-  ( "$@" >"$log" 2>&1 & echo $! >"$RUN_DIR/$name.pid" )
-  printf '  %-16s starting (log: %s)\n' "$name" "${log#$ROOT/}"
+  # setsid detaches the service from this shell's process group so it survives
+  # the terminal (or the calling tool) exiting, and the wrapper records its own
+  # pid before exec'ing so the pid file always points at the real process.
+  setsid nohup bash -c 'echo $$ >"$1"; shift; exec "$@"' _ "$RUN_DIR/$name.pid" "$@" \
+    >"$log" 2>&1 </dev/null &
+  sleep 0.3
+  printf '  %-16s starting (pid %s, log: %s)\n' "$name" "$(cat "$RUN_DIR/$name.pid" 2>/dev/null || echo '?')" "${log#$ROOT/}"
 }
 
 stop_all() {
@@ -86,10 +94,11 @@ if [ "$APP_ONLY" = "0" ]; then
       wait_for_port "$DIRECTOR_PORT" "director server" 60 || true
     fi
     if ! "$LMSTUDIO_BIN" ps 2>/dev/null | grep -q "$DIRECTOR_MODEL"; then
-      printf '  %-16s loading %s\n' "director model" "$DIRECTOR_MODEL"
-      "$LMSTUDIO_BIN" load "$DIRECTOR_MODEL" --gpu max -c 8192 \
+      printf '  %-16s loading %s as %s\n' "director model" "$LMSTUDIO_MODEL" "$DIRECTOR_MODEL"
+      "$LMSTUDIO_BIN" load "$LMSTUDIO_MODEL" --gpu max -c 8192 \
         --identifier "$DIRECTOR_MODEL" --ttl 7200 -y >"$LOG_DIR/director-load.log" 2>&1 \
-        || printf '  %-16s FAILED — run: %s load %s\n' "director model" "$LMSTUDIO_BIN" "$DIRECTOR_MODEL" >&2
+        || printf '  %-16s FAILED — run: %s ls   (then)   %s load <model> --identifier %s\n' \
+             "director model" "$LMSTUDIO_BIN" "$LMSTUDIO_BIN" "$DIRECTOR_MODEL" >&2
     else
       printf '  %-16s %s loaded\n' "director model" "$DIRECTOR_MODEL"
     fi

@@ -48,15 +48,48 @@ ZEROPREP_ASR_MODEL=medium \
 
 ## Configuration
 
-`config/local.json` holds the local stack settings: director URL/model,
-ASR URL/language, the ComfyUI checkpoint and sampling parameters, the voice
-VAD thresholds, and local rate limits. Environment variables override it
+Everything is editable from the **gear button** next to the microphone picker and
+saved server-side to `config/settings.local.json` (gitignored):
+
+| Section | What you can change |
+| --- | --- |
+| Voice pipeline | Local machine (offline) or OpenAI Realtime (cloud) |
+| Image generation | **on/off switch**, provider (local ComfyUI / Gemini / any OpenAI-compatible image API), endpoint, model or checkpoint, API key, size, steps |
+| Director LLM | Local model server or a custom OpenAI-compatible chat API: endpoint, model, key, temperature |
+| Speech to text | Local Whisper service or a custom `/audio/transcriptions` API: endpoint, model, key, language |
+| Cloud key | OpenAI key, used only by the cloud pipeline |
+
+Turning **image generation off** stops background generation entirely: scenes are
+built from text, icons, motion, and layout, and images you upload yourself still
+appear. The header badge shows `IMAGES OFF` so the state is never ambiguous.
+
+API keys are write-only: the server reports only whether one is set, and **Clear**
+is the explicit way to remove it. *Restore local defaults* deletes the saved file
+and returns to the shipped configuration.
+
+Precedence, weakest first: `config/local.json` → environment variables →
+`config/settings.local.json`. The saved file wins because it is the most recent
+and most explicit choice; a field an environment variable owns is shown disabled.
+
+What each custom provider expects:
+
+- **Director** — `POST {baseUrl}/chat/completions`, OpenAI-compatible, with
+  `Authorization: Bearer <key>`. Works with OpenAI, Groq, OpenRouter, vLLM,
+  Ollama (`http://127.0.0.1:11434/v1`), and LM Studio.
+- **Speech** — `POST {baseUrl}/audio/transcriptions`, multipart, so OpenAI, Groq,
+  and self-hosted Whisper servers all work.
+- **Imagery** — `POST {baseUrl}/images/generations`; the response may carry
+  `b64_json` or a URL. The configured width/height is mapped to the closest
+  supported size (`1536x1024`, `1024x1536`, or `1024x1024`).
+
+`config/local.json` still holds the shipped defaults and the non-editable tuning
+(VAD thresholds, negative prompt, sampler). Environment variables override it
 (`ZEROPREP_DIRECTOR_URL`, `ZEROPREP_DIRECTOR_MODEL`, `ZEROPREP_ASR_URL`,
 `ZEROPREP_ASR_MODEL`, `ZEROPREP_COMFY_URL`, `ZEROPREP_COMFY_CHECKPOINT`,
-`ZEROPREP_LOCAL_IMAGERY`, `ZEROPREP_LOCAL`).
+`ZEROPREP_LOCAL`, `ZEROPREP_LOCAL_IMAGERY`).
 
-Set `ZEROPREP_LOCAL=0` to fall back to the original cloud behaviour, and
-`ZEROPREP_LOCAL_IMAGERY=0` to keep local voice while sending imagery to Gemini.
+Set `ZEROPREP_LOCAL=0` to fall back to the original cloud behaviour, or pick
+"OpenAI Realtime (cloud)" in the panel.
 
 ### Voice turn detection
 
@@ -117,6 +150,8 @@ so a native runtime is required for GPU inference.
 ```bash
 python3 local/test-director-flow.py     # transcript -> scene commands, no browser
 python3 local/e2e_voice_test.py         # real Firefox, real speech, full loop
+python3 local/e2e_settings_test.py      # the settings panel, through a real browser
+python3 local/test_custom_api.py        # every backend pointed at a stand-in API
 python3 local/bench-director.py         # compare director models and modes
 python3 local/comfy_smoke.py --label sdxl   # one image, with timing
 python3 local/asr_server.py --file clip.wav # one transcription
@@ -136,6 +171,11 @@ staged; it writes a screenshot to `local/logs/e2e-scene.png`. It needs
 **`failed to parse grammar` from the director.** The model server rejected the
 JSON schema. `toLocalGrammarSchema()` strips the keywords LM Studio cannot
 compile (`maxItems: 0`); if you add schema keywords, keep that in mind.
+
+**A settings change seems to do nothing.** Saving writes
+`config/settings.local.json`; the panel reloads itself from it. If a custom
+endpoint fails, hover the header badge or open `/api/local/status` — each probe
+reports its own URL and error.
 
 **Open the app on `localhost` and `127.0.0.1` interchangeably.** Next.js reports
 the request host it was configured with, so `lib/request-guards.ts` treats the

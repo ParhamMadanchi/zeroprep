@@ -152,6 +152,8 @@ import {
   type LocalVoiceConfig,
   type LocalVoiceSession,
 } from "@/lib/local-voice";
+import type { PublicSettings } from "@/lib/settings-types";
+import BackendSettingsPanel from "./settings-panel";
 
 type SceneKind = "cover" | "blank" | "hero" | "cards" | "metric" | "quote";
 
@@ -197,10 +199,11 @@ type LocalProbeStatus = {
 type LocalStatus = {
   mode: "local" | "cloud";
   ready: boolean;
-  director: { model: string };
-  imagery: { checkpoint: string; provider: string };
+  director: { model: string; provider?: string };
+  imagery: { enabled?: boolean; provider: string; model?: string; checkpoint?: string };
   voice: LocalVoiceConfig;
   probes: LocalProbeStatus[];
+  settings?: PublicSettings;
 };
 
 const MICROPHONE_STORAGE_KEY = "zeroprep.microphone-device-id";
@@ -1022,6 +1025,7 @@ export default function Home() {
   const [isModelSettingsOpen, setIsModelSettingsOpen] = useState(false);
   const [presentationAssets, setPresentationAssets] = useState<PresentationAsset[]>([]);
   const [localStatus, setLocalStatus] = useState<LocalStatus | null>(null);
+  const [imageryEnabled, setImageryEnabled] = useState(true);
 
   const sceneRef = useRef(scene);
   const stageFrameRef = useRef<HTMLDivElement | null>(null);
@@ -1042,6 +1046,7 @@ export default function Home() {
   const nextSceneSequenceRef = useRef(0);
   const presentationAssetsRef = useRef<PresentationAsset[]>([]);
   const localSessionRef = useRef<LocalVoiceSession | null>(null);
+  const imageryEnabledRef = useRef(true);
 
   useEffect(() => {
     sceneRef.current = scene;
@@ -1166,23 +1171,52 @@ export default function Home() {
     };
   }, [refreshMicrophones]);
 
+  const applyLocalStatus = useCallback((status: LocalStatus) => {
+    setLocalStatus(status);
+    // The settings panel owns the switch; the scene builder only needs the value.
+    const enabled = status.settings?.imagery.enabled ?? status.imagery.enabled ?? true;
+    imageryEnabledRef.current = enabled;
+    setImageryEnabled(enabled);
+  }, []);
+
+  const refreshLocalStatus = useCallback(async () => {
+    try {
+      const response = await fetch("/api/local/status", { cache: "no-store" });
+      if (!response.ok) return;
+      applyLocalStatus((await response.json()) as LocalStatus);
+    } catch {
+      // A cloud deployment simply has no local status endpoint.
+    }
+  }, [applyLocalStatus]);
+
+  /** Stable identity: the settings panel must not re-fetch on parent renders. */
+  const handleSettingsSaved = useCallback(() => {
+    void refreshLocalStatus();
+  }, [refreshLocalStatus]);
+
   useEffect(() => {
     let cancelled = false;
+    // The fetch lives in the effect (rather than calling refreshLocalStatus)
+    // so state is only touched after the await resolves.
     const load = async () => {
       try {
         const response = await fetch("/api/local/status", { cache: "no-store" });
-        if (!response.ok) return;
-        const status = (await response.json()) as LocalStatus;
-        if (!cancelled) setLocalStatus(status);
+        if (!response.ok || cancelled) return;
+        applyLocalStatus((await response.json()) as LocalStatus);
       } catch {
         // A cloud deployment simply has no local status endpoint.
       }
     };
     void load();
+    // Re-check when the tab regains focus, so a settings change made elsewhere
+    // (or a backend that just came up) is picked up without a reload.
+    const onFocus = () => void load();
+    window.addEventListener("focus", onFocus);
     return () => {
       cancelled = true;
+      window.removeEventListener("focus", onFocus);
     };
-  }, []);
+  }, [applyLocalStatus]);
 
   const detectMicrophones = useCallback(async () => {
     if (!navigator.mediaDevices?.getUserMedia) {
@@ -1305,6 +1339,7 @@ export default function Home() {
 
     const canGenerateImagery =
       v7.imagery.enabled &&
+      imageryEnabledRef.current &&
       !imageryUnavailableRef.current &&
       startsLogicalScene &&
       !suppressGeneratedImagery &&
@@ -2033,6 +2068,7 @@ export default function Home() {
                 }
               >
                 LOCAL MACHINE · {localStatus.director.model}
+                {!imageryEnabled && " · IMAGES OFF"}
               </span>
             </>
           )}
@@ -2290,6 +2326,10 @@ export default function Home() {
                     );
                   })}
                 </div>
+                <BackendSettingsPanel
+                  disabled={connection === "live" || connection === "connecting"}
+                  onSaved={handleSettingsSaved}
+                />
               </div>
             )}
             <small id="microphone-help">{microphoneHelp}</small>

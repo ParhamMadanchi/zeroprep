@@ -50,3 +50,6 @@ tsconfig.tsbuildinfo
 
 # python bytecode cache
 __pycache__/
+
+# runtime settings written by the settings panel
+/config/settings.local.json

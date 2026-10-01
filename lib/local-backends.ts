@@ -1,61 +1,86 @@
 import local from "@/config/local.json";
+import { imageryApiKey, resolveSettings, type Settings } from "@/lib/settings";
 
 /**
- * Configuration and health probes for the fully local ZeroPrep stack.
+ * Resolves runtime settings into concrete backend clients and health probes.
  *
- * Local mode replaces the two cloud calls the product normally makes:
- *   - OpenAI Realtime (speech in, director decisions out) -> local ASR + local LLM
- *   - Gemini image generation                            -> local ComfyUI
- *
- * Every value has an environment override so the same build can point at a
- * different machine (a second GPU box, a bigger model server) without edits.
+ * Every backend can either be the local process that ships with this repo or a
+ * custom HTTP API the presenter configured, so nothing here assumes "local".
  */
-
-function envString(name: string, fallback: string) {
-  const value = process.env[name];
-  return value && value.trim() ? value.trim() : fallback;
-}
 
 function envNumber(name: string, fallback: number) {
   const value = Number(process.env[name]);
   return Number.isFinite(value) && value > 0 ? value : fallback;
 }
 
-/** Local mode is on unless ZEROPREP_LOCAL=0, so a cloned checkout just works. */
-export const LOCAL_MODE_ENABLED =
-  process.env.ZEROPREP_LOCAL !== "0" && local.enabled_by_default !== false;
+export function directorConfig(settings: Settings = resolveSettings()) {
+  return {
+    provider: settings.director.provider,
+    url: settings.director.baseUrl.replace(/\/+$/, ""),
+    model: settings.director.model,
+    apiKey: settings.director.apiKey || settings.cloud.openaiApiKey,
+    temperature: settings.director.temperature,
+    maxTokens: settings.director.maxTokens,
+    timeoutMs: envNumber("ZEROPREP_DIRECTOR_TIMEOUT_MS", local.director.timeout_ms),
+    historyTurns: local.director.history_turns,
+  };
+}
 
-export const DIRECTOR_URL = envString("ZEROPREP_DIRECTOR_URL", local.director.url).replace(/\/+$/, "");
-export const DIRECTOR_MODEL = envString("ZEROPREP_DIRECTOR_MODEL", local.director.model);
-export const DIRECTOR_TIMEOUT_MS = envNumber("ZEROPREP_DIRECTOR_TIMEOUT_MS", local.director.timeout_ms);
+export function transcriberConfig(settings: Settings = resolveSettings()) {
+  return {
+    provider: settings.transcriber.provider,
+    url: settings.transcriber.baseUrl.replace(/\/+$/, ""),
+    model: settings.transcriber.model,
+    apiKey: settings.transcriber.apiKey || settings.cloud.openaiApiKey,
+    language: settings.transcriber.language,
+    timeoutMs: envNumber("ZEROPREP_ASR_TIMEOUT_MS", local.asr.timeout_ms),
+  };
+}
 
-export const ASR_URL = envString("ZEROPREP_ASR_URL", local.asr.url).replace(/\/+$/, "");
-export const ASR_LANGUAGE = envString("ZEROPREP_ASR_LANGUAGE", local.asr.language);
-export const ASR_TIMEOUT_MS = envNumber("ZEROPREP_ASR_TIMEOUT_MS", local.asr.timeout_ms);
-
-export const COMFY_URL = envString("ZEROPREP_COMFY_URL", local.imagery.url).replace(/\/+$/, "");
-export const COMFY_CHECKPOINT = envString("ZEROPREP_COMFY_CHECKPOINT", local.imagery.checkpoint);
-export const COMFY_TIMEOUT_MS = envNumber("ZEROPREP_COMFY_TIMEOUT_MS", local.imagery.timeout_ms);
+export function imageryConfig(settings: Settings = resolveSettings()) {
+  return {
+    enabled: settings.imagery.enabled,
+    provider: settings.imagery.provider,
+    url: settings.imagery.baseUrl.replace(/\/+$/, ""),
+    model: settings.imagery.model,
+    apiKey: imageryApiKey(settings),
+    width: settings.imagery.width,
+    height: settings.imagery.height,
+    steps: settings.imagery.steps,
+    cfg: settings.imagery.cfg,
+    timeoutMs: envNumber("ZEROPREP_COMFY_TIMEOUT_MS", local.imagery.timeout_ms),
+  };
+}
 
 export type LocalProbe = {
-  id: "director" | "asr" | "imagery";
+  id: "voice" | "director" | "asr" | "imagery";
   label: string;
   url: string;
   ok: boolean;
   detail: string;
 };
 
-async function probeJson(url: string, timeoutMs: number): Promise<{ ok: boolean; body: unknown; error?: string }> {
+type ProbeResult = { ok: boolean; body: unknown; error?: string };
+
+async function probeJson(
+  url: string,
+  timeoutMs: number,
+  apiKey = "",
+): Promise<ProbeResult> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
-    const response = await fetch(url, { signal: controller.signal, cache: "no-store" });
+    const response = await fetch(url, {
+      signal: controller.signal,
+      cache: "no-store",
+      headers: apiKey ? { Authorization: `Bearer ${apiKey}` } : undefined,
+    });
     const text = await response.text();
     let body: unknown = text;
     try {
       body = JSON.parse(text);
     } catch {
-      // Leave the raw text in place; some endpoints answer with plain text.
+      // Some endpoints answer with plain text; keep it.
     }
     return { ok: response.ok, body };
   } catch (error) {
@@ -65,49 +90,94 @@ async function probeJson(url: string, timeoutMs: number): Promise<{ ok: boolean;
   }
 }
 
-/** Probe every local backend so the UI can explain exactly what is missing. */
+/** Probe every configured backend so the UI can explain exactly what is missing. */
 export async function probeLocalBackends(timeoutMs = 2500): Promise<LocalProbe[]> {
-  const [director, asr, imagery] = await Promise.all([
-    probeJson(`${DIRECTOR_URL}/models`, timeoutMs),
-    probeJson(`${ASR_URL}/health`, timeoutMs),
-    probeJson(`${COMFY_URL}/system_stats`, timeoutMs),
+  const settings = resolveSettings();
+  const director = directorConfig(settings);
+  const transcriber = transcriberConfig(settings);
+  const imagery = imageryConfig(settings);
+
+  const [directorProbe, asrProbe, imageryProbe] = await Promise.all([
+    probeJson(`${director.url}/models`, timeoutMs, director.apiKey),
+    transcriber.provider === "local"
+      ? probeJson(`${transcriber.url}/health`, timeoutMs)
+      : probeJson(`${transcriber.url}/models`, timeoutMs, transcriber.apiKey),
+    imagery.enabled && imagery.provider === "comfyui"
+      ? probeJson(`${imagery.url}/system_stats`, timeoutMs)
+      : Promise.resolve<ProbeResult>({ ok: true, body: null }),
   ]);
 
-  const directorIds = Array.isArray((director.body as { data?: unknown })?.data)
-    ? ((director.body as { data: { id?: string }[] }).data.map((model) => model.id).filter(Boolean) as string[])
+  const directorIds = Array.isArray((directorProbe.body as { data?: unknown })?.data)
+    ? ((directorProbe.body as { data: { id?: string }[] }).data
+        .map((model) => model.id)
+        .filter(Boolean) as string[])
     : [];
-  const directorReady = director.ok && (directorIds.length === 0 || directorIds.includes(DIRECTOR_MODEL));
+  const directorReady =
+    directorProbe.ok && (directorIds.length === 0 || directorIds.includes(director.model));
 
-  const asrBody = (asr.body ?? {}) as { ok?: boolean; model?: string; device?: string; error?: string };
-  const imageryStats = (imagery.body ?? {}) as { system?: { comfyui_version?: string } };
+  const asrBody = (asrProbe.body ?? {}) as {
+    ok?: boolean;
+    model?: string;
+    device?: string;
+    error?: string;
+  };
+  const asrReady = transcriber.provider === "local" ? Boolean(asrProbe.ok && asrBody.ok) : asrProbe.ok;
+
+  const imageryStats = (imageryProbe.body ?? {}) as { system?: { comfyui_version?: string } };
+  const imageryReady = !imagery.enabled
+    ? true
+    : imagery.provider === "comfyui"
+      ? Boolean(imageryProbe.ok)
+      : Boolean(imagery.apiKey);
 
   return [
     {
+      id: "voice",
+      label: "Voice pipeline",
+      url: "",
+      ok: true,
+      detail:
+        settings.voice.pipeline === "local"
+          ? "offline: local speech + local director"
+          : "cloud: OpenAI Realtime over WebRTC",
+    },
+    {
       id: "director",
       label: "Director LLM",
-      url: DIRECTOR_URL,
+      url: director.url,
       ok: directorReady,
       detail: directorReady
-        ? `${DIRECTOR_MODEL}${directorIds.length ? "" : " (server up, load a model)"}`
-        : director.error || `model ${DIRECTOR_MODEL} is not loaded`,
+        ? `${director.model}${directorIds.length ? "" : " (server up, no model list)"}`
+        : directorProbe.error || `model ${director.model} is not available`,
     },
     {
       id: "asr",
       label: "Speech to text",
-      url: ASR_URL,
-      ok: Boolean(asr.ok && asrBody.ok),
-      detail: asrBody.ok
-        ? `${asrBody.model} on ${asrBody.device}`
-        : asrBody.error || asr.error || "transcription service is not ready",
+      url: transcriber.url,
+      ok: asrReady,
+      detail:
+        transcriber.provider === "local"
+          ? asrBody.ok
+            ? `${asrBody.model ?? "whisper"} on ${asrBody.device ?? "cpu"}`
+            : asrBody.error || asrProbe.error || "transcription service is not ready"
+          : asrProbe.ok
+            ? `custom API ready${transcriber.model ? ` · ${transcriber.model}` : ""}`
+            : asrProbe.error || "custom transcription API is unreachable",
     },
     {
       id: "imagery",
       label: "Image generation",
-      url: COMFY_URL,
-      ok: Boolean(imagery.ok),
-      detail: imagery.ok
-        ? `ComfyUI ${imageryStats.system?.comfyui_version ?? ""} · ${COMFY_CHECKPOINT}`.trim()
-        : imagery.error || "ComfyUI is not reachable",
+      url: imagery.enabled ? imagery.url : "",
+      ok: imageryReady,
+      detail: !imagery.enabled
+        ? "disabled in settings"
+        : imagery.provider === "comfyui"
+          ? imageryProbe.ok
+            ? `ComfyUI ${imageryStats.system?.comfyui_version ?? ""} · ${imagery.model}`.trim()
+            : imageryProbe.error || "ComfyUI is not reachable"
+          : imagery.apiKey
+            ? `${imagery.provider} · ${imagery.model}`
+            : `${imagery.provider} needs an API key`,
     },
   ];
 }

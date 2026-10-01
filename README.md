@@ -110,9 +110,22 @@ answered, and `GET /api/local/status` reports each one.
 | Gemini scene imagery | ComfyUI with a local Stable Diffusion checkpoint |
 
 Imagery is asynchronous and optional: without ComfyUI, presentations still build
-with text, icons, motion, and layout. Set `ZEROPREP_LOCAL=0` to go back to the
-cloud path. Full setup, hardware notes, and troubleshooting live in
-[LOCAL_SETUP.md](LOCAL_SETUP.md).
+with text, icons, motion, and layout.
+
+### Settings
+
+The gear button next to the microphone picker opens the settings panel:
+
+- **Image generation on/off** — stop generating scene backgrounds entirely.
+- **Custom APIs** — point the director LLM, speech recognition, and image
+  generation at any OpenAI-compatible endpoint, with its own API key, instead of
+  the local stack.
+- **Voice pipeline** — local machine (offline) or OpenAI Realtime (cloud).
+
+Settings are saved on this machine in `config/settings.local.json` and apply to
+the next session. API keys are write-only and never sent back to the browser.
+Set `ZEROPREP_LOCAL=0` to go back to the cloud path entirely. Full setup,
+hardware notes, and troubleshooting live in [LOCAL_SETUP.md](LOCAL_SETUP.md).
 
 ## Deploy to Vercel
 

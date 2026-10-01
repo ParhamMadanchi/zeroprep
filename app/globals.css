@@ -2332,6 +2332,198 @@ kbd {
   color: var(--lime);
 }
 
+/* Backend settings live below the voice model picker inside the same panel. */
+.backend-settings {
+  margin-top: 10px;
+  padding-top: 9px;
+  border-top: 1px dashed var(--line);
+}
+
+.backend-settings.is-loading {
+  color: var(--muted);
+  font-family: var(--font-mono);
+  font-size: 6px;
+  letter-spacing: 0.08em;
+}
+
+.settings-group {
+  margin-bottom: 10px;
+  padding: 8px;
+  border: 1px solid var(--line);
+  border-radius: 2px;
+  background: rgba(255, 255, 255, 0.4);
+}
+
+.settings-group.is-off {
+  background: rgba(17, 17, 15, 0.04);
+}
+
+.settings-group-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 7px;
+  font-family: var(--font-mono);
+  font-size: 5px;
+  font-weight: 700;
+  letter-spacing: 0.09em;
+  color: var(--muted);
+}
+
+.settings-group-heading strong {
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  text-transform: none;
+}
+
+.settings-switch {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 2px 6px;
+  border: 1px solid var(--ink);
+  border-radius: 999px;
+  color: var(--ink);
+  cursor: pointer;
+}
+
+.settings-switch input {
+  width: auto;
+  margin: 0;
+  accent-color: var(--ink);
+}
+
+.settings-field {
+  display: block;
+  margin-bottom: 6px;
+}
+
+.settings-field-label {
+  display: block;
+  margin-bottom: 3px;
+  font-family: var(--font-mono);
+  font-size: 5px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  color: var(--muted);
+}
+
+.settings-field small {
+  display: block;
+  margin-top: 3px;
+  font-family: var(--font-mono);
+  font-size: 5px;
+  letter-spacing: 0.04em;
+  color: var(--muted);
+}
+
+.backend-settings input[type="text"],
+.backend-settings input[type="url"],
+.backend-settings input[type="password"],
+.backend-settings input[type="number"],
+.backend-settings select {
+  box-sizing: border-box;
+  width: 100%;
+  min-height: 24px;
+  padding: 4px 6px;
+  border: 1px solid var(--line);
+  border-radius: 2px;
+  background: var(--paper);
+  color: var(--ink);
+  font-family: var(--font-mono);
+  font-size: 7px;
+}
+
+.backend-settings input:disabled,
+.backend-settings select:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.settings-row {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 6px;
+}
+
+.settings-key-row {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.settings-mini-button {
+  flex: none;
+  padding: 3px 6px;
+  border: 1px solid var(--line);
+  border-radius: 2px;
+  background: transparent;
+  color: var(--muted);
+  font-family: var(--font-mono);
+  font-size: 5px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  cursor: pointer;
+}
+
+.settings-mini-button:hover {
+  border-color: var(--ink);
+  color: var(--ink);
+}
+
+.settings-actions {
+  display: flex;
+  gap: 6px;
+}
+
+.settings-actions button {
+  flex: 1;
+  min-height: 26px;
+  padding: 5px 8px;
+  border: 1px solid var(--ink);
+  border-radius: 2px;
+  background: var(--ink);
+  color: var(--paper);
+  font-family: var(--font-mono);
+  font-size: 6px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  cursor: pointer;
+}
+
+.settings-actions button:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.settings-actions button.settings-secondary {
+  background: transparent;
+  color: var(--ink);
+}
+
+.settings-note,
+.settings-saved,
+.settings-error {
+  margin: 6px 0 0;
+  font-family: var(--font-mono);
+  font-size: 5px;
+  line-height: 1.5;
+  letter-spacing: 0.04em;
+}
+
+.settings-note {
+  color: var(--muted);
+}
+
+.settings-saved {
+  color: #2f7d4f;
+}
+
+.settings-error {
+  color: #b23c2a;
+}
+
 @keyframes model-settings-in {
   from {
     opacity: 0;

@@ -1,5 +1,5 @@
 import local from "@/config/local.json";
-import { COMFY_CHECKPOINT, COMFY_TIMEOUT_MS, COMFY_URL } from "@/lib/local-backends";
+import { imageryConfig } from "@/lib/local-backends";
 
 /**
  * Local scene imagery through ComfyUI.
@@ -136,16 +136,16 @@ function seedFromScene(sceneId: string) {
   return Math.abs(hash) % 2_147_483_647;
 }
 
-async function cancelRun(promptId: string | null) {
+async function cancelRun(baseUrl: string, promptId: string | null) {
   try {
     if (promptId) {
-      await fetch(`${COMFY_URL}/queue`, {
+      await fetch(`${baseUrl}/queue`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ delete: [promptId] }),
       });
     }
-    await fetch(`${COMFY_URL}/interrupt`, { method: "POST" });
+    await fetch(`${baseUrl}/interrupt`, { method: "POST" });
   } catch {
     // Cancellation is best effort; a stale image is simply never shown.
   }
@@ -156,8 +156,9 @@ async function cancelRun(promptId: string | null) {
  * The newest scene always wins: an aborted request interrupts its own run.
  */
 export async function generateLocalImage(scene: LocalImageryScene, signal: AbortSignal) {
+  const config = imageryConfig();
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), COMFY_TIMEOUT_MS);
+  const timer = setTimeout(() => controller.abort(), config.timeoutMs);
   const onAbort = () => controller.abort();
   signal.addEventListener("abort", onAbort, { once: true });
 
@@ -165,19 +166,19 @@ export async function generateLocalImage(scene: LocalImageryScene, signal: Abort
   const started = Date.now();
   try {
     const graph = txt2imgGraph({
-      checkpoint: COMFY_CHECKPOINT,
+      checkpoint: config.model,
       positive: buildLocalPrompt(scene),
       negative: local.imagery.negative_prompt,
-      width: local.imagery.width,
-      height: local.imagery.height,
-      steps: local.imagery.steps,
-      cfg: local.imagery.cfg,
+      width: config.width,
+      height: config.height,
+      steps: config.steps,
+      cfg: config.cfg,
       samplerName: local.imagery.sampler_name,
       scheduler: local.imagery.scheduler,
       seed: seedFromScene(scene.sceneId),
     });
 
-    const queued = await fetch(`${COMFY_URL}/prompt`, {
+    const queued = await fetch(`${config.url}/prompt`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       signal: controller.signal,
@@ -193,9 +194,9 @@ export async function generateLocalImage(scene: LocalImageryScene, signal: Abort
     }
 
     let image: ComfyImage | null = null;
-    while (Date.now() - started < COMFY_TIMEOUT_MS) {
+    while (Date.now() - started < config.timeoutMs) {
       await new Promise((resolve) => setTimeout(resolve, 250));
-      const historyResponse = await fetch(`${COMFY_URL}/history/${promptId}`, {
+      const historyResponse = await fetch(`${config.url}/history/${promptId}`, {
         signal: controller.signal,
         cache: "no-store",
       });
@@ -227,7 +228,7 @@ export async function generateLocalImage(scene: LocalImageryScene, signal: Abort
       subfolder: image.subfolder ?? "",
       type: image.type ?? "output",
     });
-    const fileResponse = await fetch(`${COMFY_URL}/view?${query.toString()}`, {
+    const fileResponse = await fetch(`${config.url}/view?${query.toString()}`, {
       signal: controller.signal,
     });
     if (!fileResponse.ok) {
@@ -242,7 +243,7 @@ export async function generateLocalImage(scene: LocalImageryScene, signal: Abort
     };
   } catch (error) {
     if (signal.aborted) {
-      await cancelRun(promptId);
+      await cancelRun(config.url, promptId);
       return { ok: false as const, aborted: true as const, error: "cancelled" };
     }
     const message = error instanceof Error ? error.message : "ComfyUI is unreachable.";
