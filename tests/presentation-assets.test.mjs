@@ -8,7 +8,7 @@ test("uploaded assets use one description field with automatic semantic routing"
   const [page, assets, route, css, ramsri, danish] = await Promise.all([
     readFile(new URL("app/page.tsx", root), "utf8"),
     readFile(new URL("lib/presentation-assets.ts", root), "utf8"),
-    readFile(new URL("app/api/realtime/route.ts", root), "utf8"),
+    readFile(new URL("lib/director.ts", root), "utf8"),
     readFile(new URL("app/globals.css", root), "utf8"),
     readFile(new URL("public/demo-ramsri.jpg", root)),
     readFile(new URL("public/demo-danish.jpg", root)),

@@ -42,3 +42,11 @@ next-env.d.ts
 /.wrangler/
 /outputs/
 /work/
+tsconfig.tsbuildinfo
+
+# local model stack runtime
+/local/logs/
+/local/run/
+
+# python bytecode cache
+__pycache__/

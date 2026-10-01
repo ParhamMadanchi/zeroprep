@@ -1,5 +1,8 @@
 import { GoogleGenAI } from "@google/genai";
 import v7 from "@/config/v7.json";
+import local from "@/config/local.json";
+import { LOCAL_MODE_ENABLED } from "@/lib/local-backends";
+import { generateLocalImage, type LocalImageryScene } from "@/lib/local-imagery";
 import {
   checkRateLimit,
   hasMismatchedOrigin,
@@ -7,7 +10,10 @@ import {
 } from "@/lib/request-guards";
 
 export const runtime = "nodejs";
-export const maxDuration = 60;
+export const maxDuration = 300;
+
+/** Local ComfyUI serves imagery unless ZEROPREP_LOCAL_IMAGERY=0 forces Gemini. */
+const USE_LOCAL_IMAGERY = LOCAL_MODE_ENABLED && process.env.ZEROPREP_LOCAL_IMAGERY !== "0";
 
 type ImageryRequest = {
   sceneId?: unknown;
@@ -60,6 +66,18 @@ function cardSummary(value: unknown) {
     .filter(Boolean)
     .join("; ")
     .slice(0, 700);
+}
+
+function localCards(value: unknown): { title: string; body: string }[] {
+  if (!Array.isArray(value)) return [];
+  return value
+    .slice(0, 4)
+    .map((card) => {
+      if (!card || typeof card !== "object") return { title: "", body: "" };
+      const item = card as Record<string, unknown>;
+      return { title: cleanText(item.title, 80), body: cleanText(item.body, 180) };
+    })
+    .filter((card) => card.title || card.body);
 }
 
 function exactAssetKinds(value: unknown) {
@@ -172,14 +190,6 @@ export async function POST(request: Request) {
   );
   if (!rateLimit.allowed) return rateLimitResponse(rateLimit);
 
-  const apiKey = process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY;
-  if (!apiKey) {
-    return Response.json(
-      { error: "Generated imagery needs GEMINI_API_KEY in the server environment." },
-      { status: 503 },
-    );
-  }
-
   let body: ImageryRequest;
   try {
     body = (await request.json()) as ImageryRequest;
@@ -193,6 +203,47 @@ export async function POST(request: Request) {
   const references = referenceAssets(body.referenceAssets);
   if (!sceneId || !SCENE_KINDS.has(kind) || !title) {
     return Response.json({ error: "The scene is incomplete." }, { status: 400 });
+  }
+
+  if (USE_LOCAL_IMAGERY) {
+    const scene: LocalImageryScene = {
+      sceneId,
+      kind,
+      eyebrow: cleanText(body.eyebrow, 120),
+      title,
+      subtitle: cleanText(body.subtitle, 500),
+      metric: cleanText(body.metric, 80),
+      metricLabel: cleanText(body.metricLabel, 120),
+      quote: cleanText(body.quote, 500),
+      cards: localCards(body.cards),
+      accent: cleanText(body.accent, 16),
+      referenceCount: references.length,
+    };
+    const rendered = await generateLocalImage(scene, request.signal);
+    if (!rendered.ok) {
+      if ("aborted" in rendered || request.signal.aborted) {
+        return new Response(null, { status: 499 });
+      }
+      return Response.json({ error: rendered.error }, { status: 502 });
+    }
+    return new Response(rendered.bytes, {
+      status: 200,
+      headers: {
+        "Content-Type": rendered.mimeType,
+        "Cache-Control": "private, no-store, max-age=0",
+        "X-ZeroPrep-Scene": sceneId,
+        "X-ZeroPrep-Image-Model": `${local.imagery.provider}:${local.imagery.checkpoint}`,
+        "X-ZeroPrep-Render-Ms": String(rendered.elapsedMs),
+      },
+    });
+  }
+
+  const apiKey = process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY;
+  if (!apiKey) {
+    return Response.json(
+      { error: "Generated imagery needs GEMINI_API_KEY in the server environment." },
+      { status: 503 },
+    );
   }
 
   try {

@@ -147,6 +147,11 @@ import {
   REALTIME_MODEL_OPTIONS,
   type RealtimeModel,
 } from "@/lib/realtime-models";
+import {
+  startLocalVoiceSession,
+  type LocalVoiceConfig,
+  type LocalVoiceSession,
+} from "@/lib/local-voice";
 
 type SceneKind = "cover" | "blank" | "hero" | "cards" | "metric" | "quote";
 
@@ -180,6 +185,23 @@ type Scene = {
 type ConnectionState = "ready" | "connecting" | "live" | "error";
 type DeckMutation = "append" | "update" | "view";
 type ExportFormat = "pdf" | "pptx";
+
+type LocalProbeStatus = {
+  id: "director" | "asr" | "imagery";
+  label: string;
+  url: string;
+  ok: boolean;
+  detail: string;
+};
+
+type LocalStatus = {
+  mode: "local" | "cloud";
+  ready: boolean;
+  director: { model: string };
+  imagery: { checkpoint: string; provider: string };
+  voice: LocalVoiceConfig;
+  probes: LocalProbeStatus[];
+};
 
 const MICROPHONE_STORAGE_KEY = "zeroprep.microphone-device-id";
 const REALTIME_MODEL_STORAGE_KEY = "zeroprep.realtime-model.v2";
@@ -999,6 +1021,7 @@ export default function Home() {
     useState<RealtimeModel>(DEFAULT_REALTIME_MODEL);
   const [isModelSettingsOpen, setIsModelSettingsOpen] = useState(false);
   const [presentationAssets, setPresentationAssets] = useState<PresentationAsset[]>([]);
+  const [localStatus, setLocalStatus] = useState<LocalStatus | null>(null);
 
   const sceneRef = useRef(scene);
   const stageFrameRef = useRef<HTMLDivElement | null>(null);
@@ -1018,6 +1041,7 @@ export default function Home() {
   const imageryUrlsRef = useRef(new Set<string>());
   const nextSceneSequenceRef = useRef(0);
   const presentationAssetsRef = useRef<PresentationAsset[]>([]);
+  const localSessionRef = useRef<LocalVoiceSession | null>(null);
 
   useEffect(() => {
     sceneRef.current = scene;
@@ -1141,6 +1165,24 @@ export default function Home() {
       navigator.mediaDevices?.removeEventListener?.("devicechange", handleDeviceChange);
     };
   }, [refreshMicrophones]);
+
+  useEffect(() => {
+    let cancelled = false;
+    const load = async () => {
+      try {
+        const response = await fetch("/api/local/status", { cache: "no-store" });
+        if (!response.ok) return;
+        const status = (await response.json()) as LocalStatus;
+        if (!cancelled) setLocalStatus(status);
+      } catch {
+        // A cloud deployment simply has no local status endpoint.
+      }
+    };
+    void load();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   const detectMicrophones = useCallback(async () => {
     if (!navigator.mediaDevices?.getUserMedia) {
@@ -1574,6 +1616,8 @@ export default function Home() {
 
   const stopLive = useCallback(() => {
     intentionalCloseRef.current = true;
+    localSessionRef.current?.stop();
+    localSessionRef.current = null;
     channelRef.current?.close();
     peerRef.current?.close();
     streamRef.current?.getTracks().forEach((track) => track.stop());
@@ -1614,6 +1658,36 @@ export default function Home() {
         ? selectedMicrophoneId
         : "";
       if (selectedMicrophoneId && !requestedMicrophoneId) chooseMicrophone("");
+
+      if (localStatus?.mode === "local") {
+        const missing = (localStatus.probes ?? []).filter((probe) => !probe.ok);
+        if (missing.length) {
+          throw new Error(
+            `Local stack is not ready — ${missing
+              .map((probe) => `${probe.label}: ${probe.detail}`)
+              .join(" · ")}. See LOCAL_SETUP.md.`,
+          );
+        }
+
+        const session = await startLocalVoiceSession({
+          microphoneId: requestedMicrophoneId,
+          config: localStatus.voice,
+          assetCatalogHeader: () =>
+            encodePresentationAssetCatalog(presentationAssetsRef.current),
+          onEvent: (event) =>
+            handleRealtimeEvent({ data: JSON.stringify(event) } as MessageEvent<string>),
+        });
+        localSessionRef.current = session;
+        setActiveMicrophoneLabel(
+          availableMicrophones.find((device) => device.deviceId === requestedMicrophoneId)
+            ?.label || "System default microphone",
+        );
+        setConnection("live");
+        setTranscript("Listening locally on this machine. Speak whenever you’re ready.");
+        setDirectorStatus(`Local models ready — ${localStatus.director.model}`);
+        setDeliveryMessage("Presentation is live — exports unlock when listening stops");
+        return;
+      }
 
       const stream = await navigator.mediaDevices.getUserMedia({
         audio: {
@@ -1699,6 +1773,7 @@ export default function Home() {
     chooseMicrophone,
     connection,
     handleRealtimeEvent,
+    localStatus,
     refreshMicrophones,
     selectedMicrophoneId,
     selectedRealtimeModel,
@@ -1946,6 +2021,21 @@ export default function Home() {
           {statusLabel}
           <span className="header-divider" />
           {selectedRealtimeModelOption.shortLabel} / {v7.release}
+          {localStatus?.mode === "local" && (
+            <>
+              <span className="header-divider" />
+              <span
+                className={`local-chip ${localStatus.ready ? "is-ready" : "is-degraded"}`}
+                title={
+                  localStatus.probes
+                    .map((probe) => `${probe.label}: ${probe.ok ? "ready" : probe.detail}`)
+                    .join("\n") || "Local stack"
+                }
+              >
+                LOCAL MACHINE · {localStatus.director.model}
+              </span>
+            </>
+          )}
         </div>
         <div className="header-actions">
           <span className="keyboard-hint"><kbd>D</kbd> demo · <kbd>F</kbd> full screen</span>
@@ -1990,7 +2080,7 @@ export default function Home() {
                   : scene.backgroundStatus === "reframing"
                     ? "LAYOUT REFLOW"
                     : scene.backgroundImage
-                      ? "GEMINI IMAGE LIVE"
+                      ? "SCENE IMAGE LIVE"
                       : "LIVE"}
               </span>
             </div>

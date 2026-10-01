@@ -91,6 +91,29 @@ GEMINI_API_KEY=your_google_ai_studio_api_key
 
 The voice experience needs `OPENAI_API_KEY`. Generated backgrounds need a Gemini API key from Google AI Studio in `GEMINI_API_KEY`. If that key is absent or an image fails, ZeroPrep stays fully functional with its original text, icons, motion, and layout.
 
+## Run fully locally (no API keys)
+
+ZeroPrep also runs entirely on this machine: local Whisper for speech, a local
+instruct model for presentation direction, and local ComfyUI for scene imagery.
+
+```bash
+./local/start-local.sh
+```
+
+Open [http://127.0.0.1:3000](http://127.0.0.1:3000) and press **Start live
+presentation**. The header shows a `LOCAL MACHINE` badge once every backend has
+answered, and `GET /api/local/status` reports each one.
+
+| Cloud piece | Local replacement |
+| --- | --- |
+| OpenAI Realtime voice director | `faster-whisper large-v3` + a local LLM (LM Studio, Ollama, or any OpenAI-compatible server) |
+| Gemini scene imagery | ComfyUI with a local Stable Diffusion checkpoint |
+
+Imagery is asynchronous and optional: without ComfyUI, presentations still build
+with text, icons, motion, and layout. Set `ZEROPREP_LOCAL=0` to go back to the
+cloud path. Full setup, hardware notes, and troubleshooting live in
+[LOCAL_SETUP.md](LOCAL_SETUP.md).
+
 ## Deploy to Vercel
 
 1. Import `https://github.com/ramsrigouthamg/zeroprep` into Vercel.
@@ -113,6 +136,8 @@ This prevents anonymous visitors from creating excessive OpenAI sessions or Gemi
 
 ```bash
 npm run dev
+npm run local        # start the whole local model stack
+npm run local:stop
 npm run lint
 npm run build
 npm test

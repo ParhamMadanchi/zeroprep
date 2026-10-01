@@ -5,12 +5,13 @@ import test from "node:test";
 const root = new URL("../", import.meta.url);
 
 test("V5 opens on the ZeroPrep cover and replaces it on first speech", async () => {
-  const [v4Text, v5Text, pageSource, routeSource, cssSource, packageText] =
+  const [v4Text, v5Text, pageSource, routeSource, directorSource, cssSource, packageText] =
     await Promise.all([
       readFile(new URL("config/v4.json", root), "utf8"),
       readFile(new URL("config/v5.json", root), "utf8"),
       readFile(new URL("app/page.tsx", root), "utf8"),
       readFile(new URL("app/api/realtime/route.ts", root), "utf8"),
+      readFile(new URL("lib/director.ts", root), "utf8"),
       readFile(new URL("app/globals.css", root), "utf8"),
       readFile(new URL("package.json", root), "utf8"),
     ]);
@@ -37,7 +38,7 @@ test("V5 opens on the ZeroPrep cover and replaces it on first speech", async () 
   assert.match(pageSource, /scene\.kind === "cover"/);
   assert.match(pageSource, /numberedNext\.kind !== "cover"/);
   assert.match(pageSource, /selectedRealtimeModelOption\.shortLabel/);
-  assert.match(routeSource, /starts on the ZeroPrep welcome cover/);
+  assert.match(directorSource, /starts on the ZeroPrep welcome cover/);
   assert.match(routeSource, /turn_detection:\s*v\d\.realtime\.turn_detection/);
   assert.match(cssSource, /\.scene-cover/);
   assert.match(cssSource, /url\("\/og\.png"\)/);

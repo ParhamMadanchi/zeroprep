@@ -70,6 +70,20 @@ export function rateLimitResponse(result: RateLimitResult) {
   );
 }
 
+const LOOPBACK_HOSTS = new Set(["localhost", "127.0.0.1", "::1", "[::1]", "0.0.0.0"]);
+
+function effectivePort(url: URL) {
+  if (url.port) return url.port;
+  return url.protocol === "https:" ? "443" : "80";
+}
+
+/**
+ * Reject genuinely cross-origin requests while still allowing the spellings of
+ * "this machine" to be mixed. Next.js reports the request URL using the host it
+ * was configured with (localhost) even when the browser used 127.0.0.1, so
+ * treating the loopback aliases as one host is required for local development.
+ * Protocol and port are still compared exactly.
+ */
 export function hasMismatchedOrigin(request: Request) {
   const origin = request.headers.get("origin");
   if (!origin) return false;
@@ -77,7 +91,10 @@ export function hasMismatchedOrigin(request: Request) {
   try {
     const originUrl = new URL(origin);
     const requestUrl = new URL(request.url);
-    return originUrl.host !== requestUrl.host || originUrl.protocol !== requestUrl.protocol;
+    if (originUrl.protocol !== requestUrl.protocol) return true;
+    if (effectivePort(originUrl) !== effectivePort(requestUrl)) return true;
+    if (originUrl.hostname === requestUrl.hostname) return false;
+    return !(LOOPBACK_HOSTS.has(originUrl.hostname) && LOOPBACK_HOSTS.has(requestUrl.hostname));
   } catch {
     return true;
   }

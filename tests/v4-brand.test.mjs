@@ -5,13 +5,14 @@ import test from "node:test";
 const root = new URL("../", import.meta.url);
 
 test("V4 locks the ZeroPrep identity across app and exports", async () => {
-  const [v3Text, v4Text, brandText, pageSource, routeSource, layoutSource, packageText, favicon, baseline, socialCard] =
+  const [v3Text, v4Text, brandText, pageSource, routeSource, directorSource, layoutSource, packageText, favicon, baseline, socialCard] =
     await Promise.all([
       readFile(new URL("config/v3.json", root), "utf8"),
       readFile(new URL("config/v4.json", root), "utf8"),
       readFile(new URL("config/brand.json", root), "utf8"),
       readFile(new URL("app/page.tsx", root), "utf8"),
       readFile(new URL("app/api/realtime/route.ts", root), "utf8"),
+      readFile(new URL("lib/director.ts", root), "utf8"),
       readFile(new URL("app/layout.tsx", root), "utf8"),
       readFile(new URL("package.json", root), "utf8"),
       readFile(new URL("public/favicon.svg", root), "utf8"),
@@ -41,7 +42,7 @@ test("V4 locks the ZeroPrep identity across app and exports", async () => {
 
   assert.equal(packageJson.name, "zeroprep-live-presentations");
   assert.match(pageSource, /import brand from "@\/config\/brand\.json"/);
-  assert.match(routeSource, /You are \$\{brand\.name\}/);
+  assert.match(directorSource, /You are \$\{brand\.name\}/);
   assert.match(layoutSource, /brand\.name/);
   assert.match(favicon, />ZP<\/text>/);
   assert.match(baseline, /Treat the ZeroPrep identity as immutable/);

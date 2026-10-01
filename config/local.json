@@ -1,0 +1,46 @@
+{
+  "release": "Local",
+  "description": "Fully local ZeroPrep stack: no request leaves this machine.",
+  "enabled_by_default": true,
+  "director": {
+    "url": "http://127.0.0.1:1234/v1",
+    "model": "zeroprep-director",
+    "timeout_ms": 60000,
+    "temperature": 0.35,
+    "max_tokens": 700,
+    "history_turns": 6
+  },
+  "asr": {
+    "url": "http://127.0.0.1:8099",
+    "language": "",
+    "timeout_ms": 30000
+  },
+  "imagery": {
+    "provider": "comfyui",
+    "url": "http://127.0.0.1:8188",
+    "checkpoint": "juggernautXL_v8Rundiffusion.safetensors",
+    "width": 1344,
+    "height": 768,
+    "steps": 28,
+    "cfg": 6,
+    "sampler_name": "dpmpp_2m",
+    "scheduler": "karras",
+    "timeout_ms": 300000,
+    "negative_prompt": "text, words, letters, numbers, typography, lettering, poster, signage, book cover, newspaper, watermark, signature, caption, subtitle, logo, brand mark, slide layout, presentation frame, ui, screenshot, chart labels, deformed hands, extra fingers, low quality, blurry"
+  },
+  "voice": {
+    "sample_rate": 16000,
+    "silence_ms": 700,
+    "min_speech_ms": 250,
+    "max_utterance_ms": 20000,
+    "partial_interval_ms": 2000,
+    "energy_threshold": 0.012,
+    "noise_floor_ratio": 3
+  },
+  "security": {
+    "director_requests_per_window": 240,
+    "transcribe_requests_per_window": 240,
+    "imagery_requests_per_window": 40,
+    "rate_limit_window_ms": 600000
+  }
+}
